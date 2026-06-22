@@ -7,13 +7,14 @@ import database as db
 async def check_user_joined_all(bot: Bot, user_id: int) -> tuple:
     channels = await db.get_channels()
     not_joined = []
-    for ch_id, title in channels:
+    # FIX: unpack 3 values (channel_id, title, invite_link)
+    for ch_id, title, invite_link in channels:
         try:
             member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
             if member.status in ("left", "kicked", "banned"):
-                not_joined.append((ch_id, title))
+                not_joined.append((ch_id, title, invite_link))
         except Exception:
-            not_joined.append((ch_id, title))
+            not_joined.append((ch_id, title, invite_link))
     return len(not_joined) == 0, not_joined
 
 
@@ -91,7 +92,8 @@ async def cleanup_invalid_participants(bot: Bot) -> int:
 
         channels = await db.get_channels()
         valid = True
-        for ch_id, _ in channels:
+        # FIX: unpack 3 values (channel_id, title, invite_link)
+        for ch_id, title, invite_link in channels:
             try:
                 member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
                 if member.status in ("left", "kicked", "banned"):
