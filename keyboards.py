@@ -19,18 +19,19 @@ def main_menu(is_participant: bool = False) -> InlineKeyboardMarkup:
 
 
 def join_channels_keyboard(channels: list) -> InlineKeyboardMarkup:
+    """channels: list of (channel_id, title, invite_link)"""
     buttons = []
-    for ch_id, title in channels:
-        name = title or ch_id
-        ch_str = str(ch_id)
-        if ch_str.lstrip('-').isdigit():
-            # کانال خصوصی: -1001234567890 → t.me/c/1234567890
-            numeric = ch_str.lstrip('-')
-            if numeric.startswith('100'):
-                numeric = numeric[3:]
-            link = f"https://t.me/c/{numeric}"
+    for row in channels:
+        ch_id, title = row[0], row[1]
+        invite_link = row[2] if len(row) > 2 else None
+        name = title or str(ch_id)
+
+        if invite_link:
+            link = invite_link
         else:
-            link = f"https://t.me/{ch_str.lstrip('@')}"
+            ch_str = str(ch_id).lstrip('@')
+            link = f"https://t.me/{ch_str}"
+
         buttons.append([InlineKeyboardButton(text=f"📢 {name}", url=link)])
     buttons.append([InlineKeyboardButton(text="✅ عضو شدم، بررسی کن", callback_data="check_membership")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
