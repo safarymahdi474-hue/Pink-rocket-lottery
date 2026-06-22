@@ -22,17 +22,27 @@ def join_channels_keyboard(channels: list) -> InlineKeyboardMarkup:
     """channels: list of (channel_id, title, invite_link)"""
     buttons = []
     for row in channels:
-        ch_id, title = row[0], row[1]
+        ch_id = row[0]
+        title = row[1]
         invite_link = row[2] if len(row) > 2 else None
         name = title or str(ch_id)
 
         if invite_link:
+            # لینک دعوت اختصاصی که ادمین وارد کرده
             link = invite_link
         else:
-            ch_str = str(ch_id).lstrip('@')
-            link = f"https://t.me/{ch_str}"
+            # کانال عمومی — لینک از یوزرنیم یا آیدی عددی
+            ch_str = str(ch_id)
+            if ch_str.startswith("-100"):
+                # آیدی عددی خصوصی — لینکی نداریم، دکمه غیرفعال نشون میدیم
+                buttons.append([InlineKeyboardButton(text=f"📢 {name} (لینک ندارد)", callback_data="no_link")])
+                continue
+            else:
+                ch_str = ch_str.lstrip('@').lstrip('-')
+                link = f"https://t.me/{ch_str}"
 
         buttons.append([InlineKeyboardButton(text=f"📢 {name}", url=link)])
+
     buttons.append([InlineKeyboardButton(text="✅ عضو شدم، بررسی کن", callback_data="check_membership")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
