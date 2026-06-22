@@ -28,6 +28,7 @@ class AdminStates(StatesGroup):
     waiting_add_channel = State()
     waiting_remove_channel = State()
     waiting_blacklist_id = State()
+    waiting_invite_link = State()
 
 
 def is_admin(user_id: int) -> bool:
@@ -225,6 +226,11 @@ async def process_winners_count(message: Message, state: FSMContext):
         await message.answer("❌ عدد صحیح وارد کنید.")
 
 
+# state برای نگه داشتن اطلاعات کانال بین دو مرحله
+class AddChannelStates(StatesGroup):
+    waiting_channel_id = State()
+    waiting_invite_link = State()
+
 @router.callback_query(F.data == "admin_add_channel")
 async def cb_add_channel(call: CallbackQuery, state: FSMContext):
     await _ask_value(call, state, AdminStates.waiting_add_channel,
@@ -238,12 +244,36 @@ async def process_add_channel(message: Message, bot: Bot, state: FSMContext):
     ch = message.text.strip()
     try:
         chat = await bot.get_chat(ch)
-        await db.add_channel(str(chat.id), chat.title)
-        await state.clear()
-        await message.answer(f"✅ کانال «{chat.title}» اضافه شد.\n\n⚠️ مطمئن شو ربات ادمین این کانال است.",
-                             reply_markup=admin_back())
+        await state.update_data(channel_id=str(chat.id), channel_title=chat.title)
+        await state.set_state(AdminStates.waiting_invite_link)
+        await message.answer(
+            f"✅ کانال «{chat.title}» پیدا شد.\n\n"
+            f"حالا لینک دعوت کانال را بفرست:\n"
+            f"(از داخل کانال → Invite Link → Copy Link)\n\n"
+            f"اگه کانال عمومیه و لینک نداره، یه نقطه بفرست: .",
+            reply_markup=admin_back()
+        )
     except Exception as e:
         await message.answer(f"❌ خطا: {e}")
+
+
+@router.message(AdminStates.waiting_invite_link)
+async def process_invite_link(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    channel_title = data.get("channel_title")
+    
+    text = message.text.strip()
+    invite_link = None if text == "." else text
+    
+    await db.add_channel(channel_id, channel_title, invite_link)
+    await state.clear()
+    await message.answer(
+        f"✅ کانال «{channel_title}» اضافه شد.\n\n⚠️ مطمئن شو ربات ادمین این کانال است.",
+        reply_markup=admin_back()
+    )
 
 
 @router.callback_query(F.data == "admin_remove_channel")
