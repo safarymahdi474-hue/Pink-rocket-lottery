@@ -1,6 +1,5 @@
 import aiosqlite
 import json
-from datetime import datetime
 from config import DB_PATH
 
 
@@ -16,6 +15,7 @@ async def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             channel_id TEXT NOT NULL UNIQUE,
             title TEXT,
+            invite_link TEXT,
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -61,6 +61,11 @@ async def init_db():
         INSERT OR IGNORE INTO settings VALUES ('winners_count', '1');
         INSERT OR IGNORE INTO settings VALUES ('participants_per_level', '100');
         """)
+        # اضافه کردن ستون invite_link به کانال‌های قدیمی
+        try:
+            await db.execute("ALTER TABLE channels ADD COLUMN invite_link TEXT")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -77,13 +82,11 @@ async def set_setting(key: str, value: str):
         await db.commit()
 
 
-# ─── CHANNELS ───────────────────────────────────────────────
-
-async def add_channel(channel_id: str, title: str = None):
+async def add_channel(channel_id: str, title: str = None, invite_link: str = None):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR IGNORE INTO channels (channel_id, title) VALUES (?,?)",
-            (channel_id, title)
+            "INSERT OR REPLACE INTO channels (channel_id, title, invite_link) VALUES (?,?,?)",
+            (channel_id, title, invite_link)
         )
         await db.commit()
 
@@ -96,11 +99,9 @@ async def remove_channel(channel_id: str):
 
 async def get_channels() -> list:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT channel_id, title FROM channels") as cur:
+        async with db.execute("SELECT channel_id, title, invite_link FROM channels") as cur:
             return await cur.fetchall()
 
-
-# ─── USERS ───────────────────────────────────────────────────
 
 async def upsert_user(user_id: int, username: str, full_name: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -112,7 +113,7 @@ async def upsert_user(user_id: int, username: str, full_name: str):
         await db.commit()
 
 
-async def get_user(user_id: int) -> dict | None:
+async def get_user(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cur:
             row = await cur.fetchone()
@@ -141,8 +142,6 @@ async def get_all_user_ids() -> list:
             return [r[0] for r in await cur.fetchall()]
 
 
-# ─── PARTICIPANTS ─────────────────────────────────────────────
-
 async def is_participant(user_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT 1 FROM participants WHERE user_id=?", (user_id,)) as cur:
@@ -159,7 +158,7 @@ async def add_participant(user_id: int, referrer_id: int = None):
         await db.commit()
 
 
-async def get_participant(user_id: int) -> dict | None:
+async def get_participant(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT * FROM participants WHERE user_id=?", (user_id,)) as cur:
             row = await cur.fetchone()
@@ -187,13 +186,17 @@ async def get_all_participants() -> list:
 
 async def get_participants_count() -> int:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM participants p JOIN users u ON p.user_id=u.user_id WHERE u.is_blacklisted=0") as cur:
+        async with db.execute(
+            "SELECT COUNT(*) FROM participants p JOIN users u ON p.user_id=u.user_id WHERE u.is_blacklisted=0"
+        ) as cur:
             return (await cur.fetchone())[0]
 
 
 async def get_total_tickets() -> int:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT SUM(tickets) FROM participants p JOIN users u ON p.user_id=u.user_id WHERE u.is_blacklisted=0") as cur:
+        async with db.execute(
+            "SELECT SUM(tickets) FROM participants p JOIN users u ON p.user_id=u.user_id WHERE u.is_blacklisted=0"
+        ) as cur:
             row = await cur.fetchone()
             return row[0] or 0
 
@@ -204,8 +207,7 @@ async def get_leaderboard(by: str = "tickets", limit: int = 10) -> list:
         async with db.execute(f"""
             SELECT p.user_id, u.username, u.full_name, p.tickets, p.referral_count
             FROM participants p JOIN users u ON p.user_id=u.user_id
-            WHERE u.is_blacklisted=0
-            ORDER BY p.{col} DESC LIMIT ?
+            WHERE u.is_blacklisted=0 ORDER BY p.{col} DESC LIMIT ?
         """, (limit,)) as cur:
             return await cur.fetchall()
 
@@ -218,8 +220,6 @@ async def get_user_rank(user_id: int) -> int:
         """, (user_id,)) as cur:
             return (await cur.fetchone())[0]
 
-
-# ─── REFERRALS ───────────────────────────────────────────────
 
 async def has_referral(referred_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -234,8 +234,10 @@ async def add_referral(referrer_id: int, referred_id: int):
             INSERT OR IGNORE INTO referrals (referrer_id, referred_id, status)
             VALUES (?,?,'confirmed')
         """, (referrer_id, referred_id))
-        await db.execute("UPDATE participants SET referral_count=referral_count+1, tickets=tickets+? WHERE user_id=?",
-                         (ref_tickets, referrer_id))
+        await db.execute(
+            "UPDATE participants SET referral_count=referral_count+1, tickets=tickets+? WHERE user_id=?",
+            (ref_tickets, referrer_id)
+        )
         await db.commit()
 
 
@@ -248,8 +250,6 @@ async def get_referral_list(referrer_id: int) -> list:
         """, (referrer_id,)) as cur:
             return await cur.fetchall()
 
-
-# ─── LOTTERY REPORT ──────────────────────────────────────────
 
 async def save_lottery_report(participants_count, total_tickets, prize_pool, winners_count, winners_data):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -266,18 +266,11 @@ async def get_lottery_reports(limit: int = 5) -> list:
             return await cur.fetchall()
 
 
-# ─── RESET ───────────────────────────────────────────────────
-
 async def reset_competition():
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.executescript("""
-            DELETE FROM participants;
-            DELETE FROM referrals;
-        """)
+        await db.executescript("DELETE FROM participants; DELETE FROM referrals;")
         await db.commit()
 
-
-# ─── REMOVE INVALID PARTICIPANTS ─────────────────────────────
 
 async def remove_participant(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
