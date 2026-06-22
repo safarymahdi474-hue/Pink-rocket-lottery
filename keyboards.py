@@ -22,10 +22,15 @@ def join_channels_keyboard(channels: list) -> InlineKeyboardMarkup:
     buttons = []
     for ch_id, title in channels:
         name = title or ch_id
-        if str(ch_id).lstrip('-').isdigit():
-            link = f"https://t.me/c/{str(ch_id).lstrip('-')}"
+        ch_str = str(ch_id)
+        if ch_str.lstrip('-').isdigit():
+            # کانال خصوصی: -1001234567890 → t.me/c/1234567890
+            numeric = ch_str.lstrip('-')
+            if numeric.startswith('100'):
+                numeric = numeric[3:]
+            link = f"https://t.me/c/{numeric}"
         else:
-            link = f"https://t.me/{str(ch_id).lstrip('@')}"
+            link = f"https://t.me/{ch_str.lstrip('@')}"
         buttons.append([InlineKeyboardButton(text=f"📢 {name}", url=link)])
     buttons.append([InlineKeyboardButton(text="✅ عضو شدم، بررسی کن", callback_data="check_membership")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
