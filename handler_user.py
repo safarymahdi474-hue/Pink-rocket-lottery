@@ -71,14 +71,13 @@ async def cb_join_lottery(call: CallbackQuery, bot: Bot):
     if referrer_id and await db.is_participant(referrer_id):
         if not await db.has_referral(user.id):
             await db.add_referral(referrer_id, user.id)
-            ref_tickets = int(await db.get_setting("referral_tickets"))
             p = await db.get_participant(referrer_id)
             try:
                 await bot.send_message(
                     referrer_id,
                     f"🎉 یک دعوت معتبر برای شما ثبت شد.\n\n"
-                    f"👥 تعداد دعوت‌ها: {p['referral_count'] + 1}\n"
-                    f"🎟 تعداد تیکت‌ها: {p['tickets'] + ref_tickets}"
+                    f"👥 تعداد دعوت‌ها: {p['referral_count']}\n"
+                    f"🎟 تعداد تیکت‌ها: {p['tickets']}"
                 )
             except Exception:
                 pass
