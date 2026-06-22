@@ -30,16 +30,32 @@ async def cmd_start(message: Message, bot: Bot):
         except ValueError:
             pass
 
+    # ذخیره رفرال pending قبل از هر چیز
+    if referrer_id:
+        await db.set_setting(f"pending_ref_{user.id}", str(referrer_id))
+
     is_p = await db.is_participant(user.id)
-    if not is_p:
-        if referrer_id:
-            await db.set_setting(f"pending_ref_{user.id}", str(referrer_id))
-        await message.answer(
-            "👋 خوش اومدی!\n\nبرای شرکت در قرعه‌کشی موشک صورتی 🚀🩷 دکمه زیر رو بزن:",
-            reply_markup=main_menu(False)
-        )
-    else:
+    if is_p:
         await message.answer("منوی اصلی 👇", reply_markup=main_menu(True))
+        return
+
+    # بررسی کانال‌ها — اگه کانالی ثبت شده، اول عضویت بخواه
+    channels = await db.get_channels()
+    if channels:
+        all_joined, not_joined = await check_user_joined_all(bot, user.id)
+        if not all_joined:
+            await message.answer(
+                "👋 خوش اومدی!\n\n"
+                "برای شرکت در قرعه‌کشی موشک صورتی 🚀🩷 ابتدا باید عضو کانال‌های زیر بشی:",
+                reply_markup=join_channels_keyboard(not_joined)
+            )
+            return
+
+    # کانالی نیست یا همه رو جوین کرده — دکمه شرکت نشون بده
+    await message.answer(
+        "👋 خوش اومدی!\n\nبرای شرکت در قرعه‌کشی موشک صورتی 🚀🩷 دکمه زیر رو بزن:",
+        reply_markup=main_menu(False)
+    )
 
 
 @router.callback_query(F.data == "join_lottery")
@@ -177,7 +193,7 @@ async def cb_referral_status(call: CallbackQuery, bot: Bot):
             name = f"@{username}" if username else full_name or str(ref_id)
             channels = await db.get_channels()
             is_member = True
-            for ch_id, _ in channels:
+            for ch_id, title, invite_link in channels:
                 try:
                     member = await bot.get_chat_member(chat_id=ch_id, user_id=ref_id)
                     if member.status in ("left", "kicked", "banned"):
