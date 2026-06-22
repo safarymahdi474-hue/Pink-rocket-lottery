@@ -283,7 +283,8 @@ async def cb_remove_channel(call: CallbackQuery, state: FSMContext):
         await call.answer("هیچ کانالی ثبت نشده!", show_alert=True)
         return
     text = "کانال‌ها:\n\n"
-    for ch_id, title in channels:
+    # FIX: unpack 3 values (channel_id, title, invite_link)
+    for ch_id, title, invite_link in channels:
         text += f"• {title or ch_id}: {ch_id}\n"
     text += "\nآیدی عددی کانال را برای حذف وارد کنید:"
     await _ask_value(call, state, AdminStates.waiting_remove_channel, text)
@@ -308,7 +309,8 @@ async def cb_list_channels(call: CallbackQuery):
         text = "📋 هیچ کانالی ثبت نشده."
     else:
         lines = ["📋 لیست کانال‌ها\n"]
-        for ch_id, title in channels:
+        # FIX: unpack 3 values (channel_id, title, invite_link)
+        for ch_id, title, invite_link in channels:
             lines.append(f"• {title or '-'}: {ch_id}")
         text = "\n".join(lines)
     await call.message.edit_text(text, reply_markup=admin_back())
