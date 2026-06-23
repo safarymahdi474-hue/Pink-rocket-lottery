@@ -11,8 +11,10 @@ from config import BOT_TOKEN, DB_PATH
 from database import init_db
 import handler_user
 import handler_admin
+from scheduler import membership_check_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 
 async def main():
     os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", exist_ok=True)
@@ -24,7 +26,13 @@ async def main():
     dp.include_router(handler_user.router)
 
     logging.info("Bot started.")
-    await dp.start_polling(bot, skip_updates=True)
+
+    # scheduler و polling رو همزمان اجرا کن
+    await asyncio.gather(
+        dp.start_polling(bot, skip_updates=True),
+        membership_check_loop(bot, interval_hours=3),
+    )
+
 
 if __name__ == "__main__":
     asyncio.run(main())
