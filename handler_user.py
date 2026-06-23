@@ -5,8 +5,8 @@ from aiogram.filters import CommandStart
 import database as db
 from keyboards import (main_menu, join_channels_keyboard,
                        leaderboard_keyboard, back_button)
-from helpers import (check_user_joined_all, calculate_prize_pool,
-                     get_prize_progress, format_number)
+from helpers import (check_user_joined_all, check_and_update_participant_status,
+                     calculate_prize_pool, get_prize_progress, format_number)
 
 router = Router()
 
@@ -30,16 +30,36 @@ async def cmd_start(message: Message, bot: Bot):
         except ValueError:
             pass
 
-    # ذخیره رفرال pending قبل از هر چیز
     if referrer_id:
         await db.set_setting(f"pending_ref_{user.id}", str(referrer_id))
 
-    is_p = await db.is_participant(user.id)
-    if is_p:
+    # اگه قبلاً شرکت کرده، وضعیت عضویت کانال‌ها رو چک کن
+    if await db.is_participant(user.id):
+        status = await check_and_update_participant_status(bot, user.id)
+
+        if status == "suspended":
+            # از کانالی خارج شده
+            _, not_joined = await check_user_joined_all(bot, user.id)
+            await message.answer(
+                "⚠️ شما از یکی از کانال‌ها خارج شدید و موقتاً از قرعه‌کشی خارج شدید.\n\n"
+                "برای بازگشت به قرعه‌کشی و حفظ تمام تیکت‌هایت، دوباره عضو کانال‌های زیر بشو:",
+                reply_markup=join_channels_keyboard(not_joined)
+            )
+            return
+
+        if status == "restored":
+            p = await db.get_participant(user.id)
+            await message.answer(
+                f"✅ عضویت تأیید شد! به قرعه‌کشی برگشتی.\n\n"
+                f"🎟 تیکت‌های تو: {p['tickets']}",
+                reply_markup=main_menu(True)
+            )
+            return
+
         await message.answer("منوی اصلی 👇", reply_markup=main_menu(True))
         return
 
-    # بررسی کانال‌ها — اگه کانالی ثبت شده، اول عضویت بخواه
+    # کاربر جدید — اول کانال‌ها رو چک کن
     channels = await db.get_channels()
     if channels:
         all_joined, not_joined = await check_user_joined_all(bot, user.id)
@@ -51,7 +71,6 @@ async def cmd_start(message: Message, bot: Bot):
             )
             return
 
-    # کانالی نیست یا همه رو جوین کرده — دکمه شرکت نشون بده
     await message.answer(
         "👋 خوش اومدی!\n\nبرای شرکت در قرعه‌کشی موشک صورتی 🚀🩷 دکمه زیر رو بزن:",
         reply_markup=main_menu(False)
@@ -115,20 +134,39 @@ async def cb_join_lottery(call: CallbackQuery, bot: Bot):
 @router.callback_query(F.data == "check_membership")
 async def cb_check_membership(call: CallbackQuery, bot: Bot):
     await call.answer("در حال بررسی...")
-    all_joined, not_joined = await check_user_joined_all(bot, call.from_user.id)
+    user_id = call.from_user.id
+
+    all_joined, not_joined = await check_user_joined_all(bot, user_id)
+
     if not all_joined:
         await call.message.edit_text(
             "❌ هنوز عضو همه کانال‌ها نشدی:",
             reply_markup=join_channels_keyboard(not_joined)
         )
         return
+
+    # اگه قبلاً شرکت کرده بود و suspended بود → restore کن
+    if await db.is_participant(user_id):
+        if not await db.is_active_participant(user_id):
+            await db.restore_participant(user_id)
+            p = await db.get_participant(user_id)
+            await call.message.edit_text(
+                f"✅ عضویت تأیید شد! به قرعه‌کشی برگشتی 🎉\n\n"
+                f"🎟 تمام تیکت‌هایت بازگردانده شد: {p['tickets']} تیکت",
+                reply_markup=main_menu(True)
+            )
+            return
+        await call.message.edit_text("منوی اصلی 👇", reply_markup=main_menu(True))
+        return
+
+    # کاربر جدید → ثبت‌نام
     await cb_join_lottery(call, bot)
 
 
 @router.callback_query(F.data == "back_main")
 async def cb_back_main(call: CallbackQuery):
     await call.answer()
-    is_p = await db.is_participant(call.from_user.id)
+    is_p = await db.is_active_participant(call.from_user.id)
     await call.message.edit_text("منوی اصلی 👇", reply_markup=main_menu(is_p))
 
 
@@ -139,11 +177,13 @@ async def cb_my_stats(call: CallbackQuery):
     if not p:
         await call.answer("ابتدا در مسابقه شرکت کن!", show_alert=True)
         return
+    status_text = "✅ فعال" if p.get("is_active") else "⏸ معلق (عضو کانال‌ها نیستی)"
     await call.message.edit_text(
         f"📊 آمار من\n\n"
         f"🎟 تعداد تیکت: {p['tickets']}\n"
         f"👥 تعداد دعوت: {p['referral_count']}\n"
-        f"📅 تاریخ ثبت‌نام: {str(p['joined_at'])[:10]}",
+        f"📅 تاریخ ثبت‌نام: {str(p['joined_at'])[:10]}\n"
+        f"وضعیت: {status_text}",
         reply_markup=back_button()
     )
 
@@ -154,6 +194,13 @@ async def cb_my_chance(call: CallbackQuery):
     p = await db.get_participant(call.from_user.id)
     if not p:
         await call.answer("ابتدا در مسابقه شرکت کن!", show_alert=True)
+        return
+    if not p.get("is_active"):
+        await call.message.edit_text(
+            "⏸ شما موقتاً از قرعه‌کشی خارج شدید.\n\n"
+            "برای بازگشت، /start بزن و دوباره عضو کانال‌ها بشو.",
+            reply_markup=back_button()
+        )
         return
     total = await db.get_total_tickets()
     rank = await db.get_user_rank(call.from_user.id)
@@ -202,7 +249,7 @@ async def cb_referral_status(call: CallbackQuery, bot: Bot):
                 except Exception:
                     is_member = False
                     break
-            is_part = await db.is_participant(ref_id)
+            is_part = await db.is_active_participant(ref_id)
             icon = "✅" if (is_part and is_member) else ("⏳" if not is_part else "❌")
             lines.append(f"{icon} {name}")
         text = "\n".join(lines)
