@@ -7,7 +7,6 @@ import database as db
 async def check_user_joined_all(bot: Bot, user_id: int) -> tuple:
     channels = await db.get_channels()
     not_joined = []
-    # FIX: unpack 3 values (channel_id, title, invite_link)
     for ch_id, title, invite_link in channels:
         try:
             member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
@@ -16,6 +15,35 @@ async def check_user_joined_all(bot: Bot, user_id: int) -> tuple:
         except Exception:
             not_joined.append((ch_id, title, invite_link))
     return len(not_joined) == 0, not_joined
+
+
+async def check_and_update_participant_status(bot: Bot, user_id: int) -> str:
+    """
+    وضعیت عضویت کاربر در کانال‌ها رو چک میکنه و status رو آپدیت میکنه.
+    برمیگردونه: 'suspended' | 'restored' | 'unchanged' | 'not_participant'
+    """
+    if not await db.is_participant(user_id):
+        return "not_participant"
+
+    channels = await db.get_channels()
+    if not channels:
+        # کانالی نیست — همه فعال باشن
+        if not await db.is_active_participant(user_id):
+            await db.restore_participant(user_id)
+            return "restored"
+        return "unchanged"
+
+    all_joined, _ = await check_user_joined_all(bot, user_id)
+    is_active = await db.is_active_participant(user_id)
+
+    if not all_joined and is_active:
+        await db.suspend_participant(user_id)
+        return "suspended"
+    elif all_joined and not is_active:
+        await db.restore_participant(user_id)
+        return "restored"
+
+    return "unchanged"
 
 
 async def calculate_prize_pool() -> float:
@@ -80,6 +108,7 @@ async def run_weighted_lottery(bot: Bot, winners_count: int, dry_run: bool = Fal
 
 
 async def cleanup_invalid_participants(bot: Bot) -> int:
+    """برای قرعه‌کشی اصلی — کاربرانی که ربات رو بلاک کردن رو کاملاً حذف میکنه"""
     ids = await db.get_all_participants_ids()
     removed = 0
     for user_id in ids:
@@ -92,7 +121,6 @@ async def cleanup_invalid_participants(bot: Bot) -> int:
 
         channels = await db.get_channels()
         valid = True
-        # FIX: unpack 3 values (channel_id, title, invite_link)
         for ch_id, title, invite_link in channels:
             try:
                 member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
@@ -104,7 +132,7 @@ async def cleanup_invalid_participants(bot: Bot) -> int:
                 break
 
         if not valid:
-            await db.remove_participant(user_id)
+            await db.suspend_participant(user_id)
             removed += 1
 
     return removed
