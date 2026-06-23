@@ -33,6 +33,7 @@ async def init_db():
             referral_count INTEGER DEFAULT 0,
             referrer_id INTEGER,
             joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER DEFAULT 1,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
 
@@ -61,11 +62,14 @@ async def init_db():
         INSERT OR IGNORE INTO settings VALUES ('winners_count', '1');
         INSERT OR IGNORE INTO settings VALUES ('participants_per_level', '100');
         """)
-        # اضافه کردن ستون invite_link به کانال‌های قدیمی
-        try:
-            await db.execute("ALTER TABLE channels ADD COLUMN invite_link TEXT")
-        except Exception:
-            pass
+        for sql in [
+            "ALTER TABLE channels ADD COLUMN invite_link TEXT",
+            "ALTER TABLE participants ADD COLUMN is_active INTEGER DEFAULT 1",
+        ]:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass
         await db.commit()
 
 
@@ -148,12 +152,32 @@ async def is_participant(user_id: int) -> bool:
             return bool(await cur.fetchone())
 
 
+async def is_active_participant(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM participants WHERE user_id=? AND is_active=1", (user_id,)
+        ) as cur:
+            return bool(await cur.fetchone())
+
+
+async def suspend_participant(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE participants SET is_active=0 WHERE user_id=?", (user_id,))
+        await db.commit()
+
+
+async def restore_participant(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE participants SET is_active=1 WHERE user_id=?", (user_id,))
+        await db.commit()
+
+
 async def add_participant(user_id: int, referrer_id: int = None):
     join_tickets = int(await get_setting("join_tickets"))
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            INSERT OR IGNORE INTO participants (user_id, tickets, referral_count, referrer_id)
-            VALUES (?,?,0,?)
+            INSERT OR IGNORE INTO participants (user_id, tickets, referral_count, referrer_id, is_active)
+            VALUES (?,?,0,?,1)
         """, (user_id, join_tickets, referrer_id))
         await db.commit()
 
@@ -164,7 +188,8 @@ async def get_participant(user_id: int):
             row = await cur.fetchone()
             if row:
                 return {"user_id": row[0], "tickets": row[1], "referral_count": row[2],
-                        "referrer_id": row[3], "joined_at": row[4]}
+                        "referrer_id": row[3], "joined_at": row[4],
+                        "is_active": bool(row[5]) if len(row) > 5 else True}
             return None
 
 
@@ -179,24 +204,26 @@ async def get_all_participants() -> list:
         async with db.execute("""
             SELECT p.user_id, p.tickets, p.referral_count, u.username, u.full_name
             FROM participants p JOIN users u ON p.user_id=u.user_id
-            WHERE u.is_blacklisted=0
+            WHERE u.is_blacklisted=0 AND p.is_active=1
         """) as cur:
             return await cur.fetchall()
 
 
 async def get_participants_count() -> int:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT COUNT(*) FROM participants p JOIN users u ON p.user_id=u.user_id WHERE u.is_blacklisted=0"
-        ) as cur:
+        async with db.execute("""
+            SELECT COUNT(*) FROM participants p JOIN users u ON p.user_id=u.user_id
+            WHERE u.is_blacklisted=0 AND p.is_active=1
+        """) as cur:
             return (await cur.fetchone())[0]
 
 
 async def get_total_tickets() -> int:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT SUM(tickets) FROM participants p JOIN users u ON p.user_id=u.user_id WHERE u.is_blacklisted=0"
-        ) as cur:
+        async with db.execute("""
+            SELECT SUM(tickets) FROM participants p JOIN users u ON p.user_id=u.user_id
+            WHERE u.is_blacklisted=0 AND p.is_active=1
+        """) as cur:
             row = await cur.fetchone()
             return row[0] or 0
 
@@ -207,7 +234,8 @@ async def get_leaderboard(by: str = "tickets", limit: int = 10) -> list:
         async with db.execute(f"""
             SELECT p.user_id, u.username, u.full_name, p.tickets, p.referral_count
             FROM participants p JOIN users u ON p.user_id=u.user_id
-            WHERE u.is_blacklisted=0 ORDER BY p.{col} DESC LIMIT ?
+            WHERE u.is_blacklisted=0 AND p.is_active=1
+            ORDER BY p.{col} DESC LIMIT ?
         """, (limit,)) as cur:
             return await cur.fetchall()
 
@@ -216,7 +244,8 @@ async def get_user_rank(user_id: int) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
             SELECT COUNT(*)+1 FROM participants p JOIN users u ON p.user_id=u.user_id
-            WHERE u.is_blacklisted=0 AND p.tickets > (SELECT tickets FROM participants WHERE user_id=?)
+            WHERE u.is_blacklisted=0 AND p.is_active=1
+            AND p.tickets > (SELECT tickets FROM participants WHERE user_id=?)
         """, (user_id,)) as cur:
             return (await cur.fetchone())[0]
 
